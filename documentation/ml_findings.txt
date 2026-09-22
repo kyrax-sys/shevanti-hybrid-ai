@@ -1,0 +1,101 @@
+KEY FINDINGS — XGBoost (ML component)
+Kiran Patgar | Shevanti Hybrid AI Project
+Test period: 2016 (out-of-sample, chronological split: train 2010-2014, valid 2015, test 2016)
+
+RESULTS TABLE
+------------------------------------------------------------
+Model            MAE      RMSE      sMAPE    DirAcc
+Naive (today)     90.25    138.26    22.77%    28.5%
+7-day average     126.68   169.47    31.47%    46.6%
+XGBoost           104.00   135.80    25.13%    43.3%
+------------------------------------------------------------
+
+1. XGBOOST WINS ON RMSE, NOT ON MAE — AND THAT DIFFERENCE MATTERS
+XGBoost has the LOWEST RMSE of all three models (135.80, vs 138.26 for naive
+and 169.47 for the average). RMSE penalises large misses more heavily than
+MAE does, so this means XGBoost is the most reliable model specifically on
+the days where the price jumps or drops sharply — the "difficult days" the
+project guide asks us to evaluate separately (Stage 8).
+
+However, on MAE, the naive baseline is actually BEST (90.25 vs XGBoost's
+104.00). This is not a bug — it's a real property of this price series.
+Looking at the raw data, this market has long flat stretches where the same
+price repeats for several days in a row (roughly 20-40% of days show zero
+change year to year). On those ordinary days, "tomorrow = today" is very
+hard to beat, and XGBoost's added complexity introduces small extra error
+where a flat guess would have been exactly right.
+
+TAKEAWAY: XGBoost is not "worse than the baseline" in a simple sense — it
+trades a bit of everyday accuracy for much better behaviour on the days that
+actually matter for the project's central question (does the hybrid help
+during large price movements?). This needs to be reported honestly, not
+hidden — the project guide explicitly says a model that loses to a simple
+rule is still a valid, reportable finding.
+
+2. DIRECTIONAL ACCURACY: NAIVE'S LOW SCORE IS A DEFINITION ARTIFACT
+Naive scored worst on directional accuracy (28.5%). This is expected, not a
+weakness of "naive forecasting" in general — because the naive model always
+predicts "no change," it can only be counted correct on days where the
+actual price also didn't move. Its DirAcc score is really just measuring how
+often the market was flat (~28% of test days), not how well it "predicts
+direction."
+The 7-day average actually has the BEST directional accuracy (46.6%),
+slightly ahead of XGBoost (43.3%). This is worth flagging as an open
+question for Stage 8 rather than a settled conclusion — XGBoost does not
+yet clearly beat a simple average on direction, and this is exactly the
+kind of gap a hybrid model should try to close.
+
+3. FEATURE IMPORTANCE — WHAT XGBOOST ACTUALLY RELIES ON
+lag_1              0.371   <- by far the strongest single feature
+rolling_max_7      0.158
+rolling_min_7      0.154
+pct_change_1       0.079
+rolling_mean_7     0.070
+pct_change_7       0.049
+rolling_mean_14    0.024
+rolling_std_7      0.021
+trend_7            0.021
+lag_7              0.019
+lag_2              0.018
+lag_3              0.016
+
+Yesterday's price (lag_1) alone accounts for over a third of the model's
+decisions. After that, the recent 7-day range (rolling_max_7, rolling_min_7)
+matters much more than the recent average or trend. This fits the shape of
+the data: prices tend to sit in "bands" (e.g. clustering around 210, 420,
+820) and jump between them rather than drifting smoothly, so knowing the
+recent high/low tells the model which band the market is currently in.
+Longer-window features (rolling_mean_14, trend_7) barely matter -- 14 days
+of history adds little beyond what the last 7 days already say.
+NOTE (per project rules): this shows what XGBoost relied on statistically.
+It is not a causal claim about why the market price moved.
+
+4. ACTUAL VS PREDICTED GRAPH (2016 test set)
+XGBoost tracks the general shape of the price series reasonably well and
+follows most of the mid-range fluctuations closely. Its clearest weakness
+is at sharp step-changes -- moments where the actual price jumps almost
+vertically between price bands (e.g. straight from ~400 to 820). At these
+points the forecast visibly lags for a day or two before catching up, since
+the model is leaning heavily on lag_1 and the recent 7-day range, both of
+which only "know" about the jump after it has already happened.
+This is the single clearest opportunity for the hybrid model: XGBoost is
+structurally a day behind at level-shifts, and a statistical model with a
+faster-reacting error-correction term (ARIMA residuals) could help close
+that gap, if it reacts faster to the shift.
+
+5. WHAT THIS MEANS FOR THE HYBRID (residual learning)
+- XGBoost's biggest weakness is the first 1-2 days after a sharp level
+  shift, not general noise. This is the specific failure mode the hybrid
+  (ARIMA + XGBoost residual correction) should target.
+- lag_1 and recent min/max dominate: if ARIMA's own forecast is fed into
+  the hybrid, it should be tested alongside lag_1 rather than replacing it
+  -- both may carry overlapping but not identical information.
+- Comparison against the statistical (ARIMA) model is NOT included in this
+  file. That comparison can only be made fairly once Sujan's rolling
+  one-step ARIMA predictions are in results/tables/ and merged with mine
+  on date, using the same evaluate() function (see shared_utils.py). Do
+  not claim "ML beats statistical" or vice versa until that merge is done.
+
+STATUS: XGBoost component complete for Stages 1-4 and 6. Awaiting ARIMA
+predictions (Sujan) to build the joint comparison table before Satvik
+starts the hybrid (Stage 7).

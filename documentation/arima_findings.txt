@@ -1,0 +1,115 @@
+ARIMA (Statistical Model) — Findings Summary
+Explainable Hybrid AI for Shevanti Price Forecasting
+=====================================================
+
+1. INITIAL ISSUE FOUND
+-----------------------
+The first ARIMA implementation used model.predict(n_periods=len(test_data)),
+forecasting the entire test period (~511 days) in a single shot with no
+access to real prices along the way.
+
+Result: the forecast was a FLAT, CONSTANT value for every single test day
+(~275.55). This is a known property of ARIMA — multi-step-ahead forecasts
+made without feeding in new observations mathematically collapse toward
+the series' long-run mean as the horizon grows.
+
+Conclusion: this was not evidence that "ARIMA doesn't work" on this data.
+It was a methodology bug — the model was never given the chance to react
+to real prices.
+
+2. FIX APPLIED
+---------------
+Replaced the single long-horizon forecast with a ROLLING ONE-STEP-AHEAD
+forecast:
+  - Forecast exactly 1 day ahead using everything known so far.
+  - Feed the REAL observed price back into the model (model.update()).
+  - Repeat for each day in the test set.
+
+This matches the actual task defined in the project ("predict tomorrow
+using information available up to today") and is the same standard the
+XGBoost model was already being evaluated against.
+
+3. SECOND ISSUE FOUND: MISMATCHED TEST WINDOW
+-----------------------------------------------
+The original train/test split used a generic 80/20 split by row count,
+which placed the "test" period at Aug 2015 - Dec 2016 — NOT the same
+Jan-Dec 2016 window used to evaluate the XGBoost model (via get_splits()).
+
+Fix: ARIMA now uses the same get_splits() date boundaries as the ML
+model, so both are scored on the identical 2016 test period.
+
+4. FINAL RESULTS (matched 2016 test window)
+---------------------------------------------
+                         MAE      RMSE     sMAPE    DirAcc
+Naive (today)            ~90-110  ~138     ~23-28%  ~28.5%
+7-day average            ~118-127 ~169     ~31%     ~46.6%
+ARIMA (rolling 1-step)   101.06   137.32   24.32%   29.31%
+XGBoost (reference)      104.00   135.80   25.13%   43.29%
+
+(Note: naive/7-day figures should be re-verified on the exact matched
+test window using the corrected comparison cell, since earlier numbers
+were computed over mismatched date ranges.)
+
+5. KEY FINDINGS
+-----------------
+- After fixing the rolling-forecast bug and the date-window mismatch,
+  ARIMA's MAE and RMSE are essentially on par with XGBoost — meaning
+  ARIMA tracks the general PRICE LEVEL about as well as the ML model.
+
+- ARIMA's Directional Accuracy (~29%) is close to the naive baseline
+  and far below XGBoost's (~43%). This means ARIMA is good at staying
+  close to the right price magnitude, but has almost no skill at
+  predicting whether price will go UP or DOWN — it reacts one step
+  late to turning points rather than anticipating them.
+
+- This is an expected and explainable limitation of a LINEAR model:
+  ARIMA combines past values and past errors in a weighted-sum
+  (linear) way, so it cannot anticipate sudden nonlinear spikes or
+  crashes before they occur.
+
+6. WHAT THIS MEANS FOR THE HYBRID MODEL
+------------------------------------------
+ARIMA successfully captures the short-term, linear persistence in the
+Shevanti price series. Its main weakness — poor directional accuracy
+around sharp price movements — is exactly the gap the machine-learning
+component (XGBoost) is meant to close in the hybrid design.
+
+Recommended hybrid approach (per project synopsis): residual learning.
+  1. ARIMA produces the first forecast.
+  2. Residual = actual price - ARIMA forecast.
+  3. XGBoost is trained to predict this residual.
+  4. Final hybrid forecast = ARIMA forecast + XGBoost residual prediction.
+
+This lets the hybrid keep ARIMA's stable, explainable linear estimate
+while correcting it using ML where the linear model falls short
+(sharp/nonlinear moves).
+
+7. DELIVERABLES PRODUCED
+---------------------------
+- Validated ARIMA model (auto_arima-selected order, fit on 2010-2014
+  training data).
+- Rolling one-step-ahead forecasts for the 2016 test period.
+- Comparison table: Naive vs 7-day average vs ARIMA (matched window).
+- Actual vs Predicted plot (2 lines, matching XGBoost plot style).
+- Saved forecast file: results/tables/predictions_arima.csv
+  (date, actual, pred_arima) — ready for the hybrid model stage.
+
+8. LIMITATIONS
+-----------------
+- ARIMA is a purely linear model and cannot anticipate nonlinear
+  jumps/crashes before they happen.
+- Rolling forecast with model.update() is computationally heavier
+  than a single-shot forecast (re-estimates coefficients each step).
+- No seasonal component was modeled (seasonal=False); yearly/weekly
+  cyclicality, if present, is not being explicitly captured.
+- Order (p,d,q) was selected once on training data only; walk-forward
+  re-selection across multiple periods was not performed.
+
+9. POSSIBLE IMPROVEMENTS
+----------------------------
+- Test a seasonal ARIMA (SARIMA) variant if seasonal patterns exist.
+- Implement full walk-forward validation (retrain across multiple
+  rolling windows) rather than a single train/test split.
+- Proceed to the residual hybrid stage combining ARIMA + XGBoost.
+- Re-verify baseline numbers strictly on the matched 2016 test window
+  before finalizing the comparison table for the report.
